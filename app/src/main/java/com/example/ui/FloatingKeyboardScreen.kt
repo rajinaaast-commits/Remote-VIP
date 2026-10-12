@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.keyboard.FloatingKeyboardState
+import com.example.keyboard.KeyboardMoveDirection
 import com.example.ui.theme.AuraCardDark
 import com.example.ui.theme.AuraCyanDim
 import com.example.ui.theme.AuraCyanGlow
@@ -95,6 +96,7 @@ fun FloatingKeyboardScreen(
     onBackToPanel: () -> Unit = {},
     onCloseKeyboard: () -> Unit = {},
     onHomeAction: () -> Unit = {},
+    onMoveKeyboard: (KeyboardMoveDirection) -> Unit = {},
     onSubmitText: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -219,7 +221,87 @@ fun FloatingKeyboardScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // ==========================================================
+            // MOVE KEYBOARD BAR: UP, DOWN, LEFT, RIGHT, AND CENTER
+            // ==========================================================
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF142036))
+                    .border(1.dp, AuraCyanDim.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .testTag("kb_position_control_bar")
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "⬍ MOVE:",
+                        color = AuraCyanNeon,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    KeyboardKeyButton(
+                        label = "◀ LEFT",
+                        isSpecial = true,
+                        isSmall = true,
+                        onClick = {
+                            onInteraction()
+                            onMoveKeyboard(KeyboardMoveDirection.LEFT)
+                        },
+                        testTag = "kb_btn_move_left"
+                    )
+                    KeyboardKeyButton(
+                        label = "▲ UP",
+                        isSpecial = true,
+                        isSmall = true,
+                        onClick = {
+                            onInteraction()
+                            onMoveKeyboard(KeyboardMoveDirection.UP)
+                        },
+                        testTag = "kb_btn_move_up"
+                    )
+                    KeyboardKeyButton(
+                        label = "▼ DOWN",
+                        isSpecial = true,
+                        isSmall = true,
+                        onClick = {
+                            onInteraction()
+                            onMoveKeyboard(KeyboardMoveDirection.DOWN)
+                        },
+                        testTag = "kb_btn_move_down"
+                    )
+                    KeyboardKeyButton(
+                        label = "▶ RIGHT",
+                        isSpecial = true,
+                        isSmall = true,
+                        onClick = {
+                            onInteraction()
+                            onMoveKeyboard(KeyboardMoveDirection.RIGHT)
+                        },
+                        testTag = "kb_btn_move_right"
+                    )
+                    KeyboardKeyButton(
+                        label = "⌖ CENTER",
+                        isAccent = true,
+                        isSmall = true,
+                        onClick = {
+                            onInteraction()
+                            onMoveKeyboard(KeyboardMoveDirection.CENTER)
+                        },
+                        testTag = "kb_btn_move_center"
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             // ==========================================================
             // LIVE TEXT INPUT BOX (Cursor, Text State, Cursor Controls)

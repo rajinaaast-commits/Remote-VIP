@@ -31,6 +31,7 @@ import com.example.MainActivity
 import com.example.R
 import com.example.accessibility.AuraAccessibilityService
 import com.example.keyboard.FloatingKeyboardState
+import com.example.keyboard.KeyboardMoveDirection
 import com.example.ui.theme.AuraRemoteTheme
 import com.example.ui.OverlayDisplayMode
 import com.example.ui.TvDynamicBubbleView
@@ -42,6 +43,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.lang.ref.WeakReference
 import kotlin.math.abs
 
 class AuraOverlayService : Service() {
@@ -77,6 +79,10 @@ class AuraOverlayService : Service() {
         const val KEY_POS_Y = "overlay_y"
         const val KEY_BUBBLE_OPACITY = "bubble_opacity"
         const val KEY_KEYBOARD_OPACITY = "keyboard_opacity"
+        const val KEY_AUTO_SHOW_KEYBOARD = "auto_show_keyboard"
+        const val ACTION_OPEN_KEYBOARD = "com.example.ACTION_OPEN_KEYBOARD"
+
+        private var currentInstance: WeakReference<AuraOverlayService>? = null
 
         var isRunning: Boolean = false
             private set
@@ -94,6 +100,37 @@ class AuraOverlayService : Service() {
             val intent = Intent(context, AuraOverlayService::class.java)
             context.stopService(intent)
         }
+
+        /**
+         * Automatically triggers display of the floating keyboard on the TV.
+         * If the service is running, it immediately switches display mode to FLOATING_KEYBOARD.
+         * If the service is not running, it starts the foreground service and commands it to open the keyboard.
+         */
+        fun triggerFloatingKeyboard(context: Context) {
+            val service = currentInstance?.get()
+            if (service != null && isRunning) {
+                service.serviceScope.launch(Dispatchers.Main) {
+                    service.handleModeChange(OverlayDisplayMode.FLOATING_KEYBOARD)
+                }
+            } else {
+                val intent = Intent(context, AuraOverlayService::class.java).apply {
+                    action = ACTION_OPEN_KEYBOARD
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            }
+        }
+
+        /**
+         * Moves the active floating keyboard in the specified direction.
+         */
+        fun moveCurrentKeyboard(direction: KeyboardMoveDirection) {
+            val service = currentInstance?.get()
+            service?.moveKeyboard(direction)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -101,6 +138,7 @@ class AuraOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        currentInstance = WeakReference(this)
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         bubbleOpacity = prefs.getFloat(KEY_BUBBLE_OPACITY, 0.90f)
         keyboardOpacity = prefs.getFloat(KEY_KEYBOARD_OPACITY, 0.90f)
@@ -126,6 +164,13 @@ class AuraOverlayService : Service() {
         }
 
         initOverlayView()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_OPEN_KEYBOARD) {
+            handleModeChange(OverlayDisplayMode.FLOATING_KEYBOARD)
+        }
+        return START_STICKY
     }
 
     private fun startAsForeground() {
@@ -218,6 +263,10 @@ class AuraOverlayService : Service() {
                         },
                         onInteraction = {
                             resetInactivityTimer()
+                        },
+                        onMoveKeyboard = { direction ->
+                            resetInactivityTimer()
+                            moveKeyboard(direction)
                         }
                     )
                 }
@@ -359,9 +408,55 @@ class AuraOverlayService : Service() {
         }
     }
 
+    /**
+     * Shifts the custom floating keyboard across the screen in the specified direction.
+     * Restricts movement within safe TV screen boundaries.
+     */
+    fun moveKeyboard(direction: KeyboardMoveDirection) {
+        val params = layoutParams ?: return
+        val dm = resources.displayMetrics
+        val screenWidth = dm.widthPixels
+        val screenHeight = dm.heightPixels
+        val stepX = 140
+        val stepY = 100
+
+        when (direction) {
+            KeyboardMoveDirection.LEFT -> {
+                params.x = (params.x - stepX).coerceAtLeast(10)
+            }
+            KeyboardMoveDirection.RIGHT -> {
+                params.x = (params.x + stepX).coerceAtMost((screenWidth - 300).coerceAtLeast(100))
+            }
+            KeyboardMoveDirection.UP -> {
+                params.y = (params.y - stepY).coerceAtLeast(10)
+            }
+            KeyboardMoveDirection.DOWN -> {
+                params.y = (params.y + stepY).coerceAtMost((screenHeight - 200).coerceAtLeast(100))
+            }
+            KeyboardMoveDirection.CENTER -> {
+                params.x = ((screenWidth - 640) / 2).coerceAtLeast(20)
+                params.y = ((screenHeight - 440) / 2).coerceAtLeast(20)
+            }
+        }
+
+        prefs.edit()
+            .putInt(KEY_POS_X, params.x)
+            .putInt(KEY_POS_Y, params.y)
+            .apply()
+
+        try {
+            windowManager?.updateViewLayout(overlayContainer, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update layout params on move", e)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        if (currentInstance?.get() == this) {
+            currentInstance = null
+        }
         prefListener?.let { prefs.unregisterOnSharedPreferenceChangeListener(it) }
         stopTimer()
         serviceJob.cancel()

@@ -14,7 +14,8 @@ class AuraAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Passive listener; no event interception required, saving TV CPU & RAM
+        // Automatically detect active input fields and trigger floating keyboard
+        TvInputDetector.onAccessibilityEvent(this, event)
     }
 
     override fun onInterrupt() {

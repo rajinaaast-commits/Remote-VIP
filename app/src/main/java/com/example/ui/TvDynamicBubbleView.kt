@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.accessibility.AuraAccessibilityService
 import com.example.keyboard.FloatingKeyboardState
+import com.example.keyboard.KeyboardMoveDirection
 import com.example.ui.theme.AuraCardDark
 import com.example.ui.theme.AuraCyanDim
 import com.example.ui.theme.AuraCyanGlow
@@ -126,6 +127,7 @@ fun TvDynamicBubbleView(
     onMediaNext: () -> Unit = {},
     onMediaPrev: () -> Unit = {},
     onMediaPlayPause: () -> Unit = {},
+    onMoveKeyboard: (KeyboardMoveDirection) -> Unit = {},
     onModeChange: (OverlayDisplayMode) -> Unit,
     onResetPosition: () -> Unit,
     onCloseService: () -> Unit,
@@ -259,7 +261,8 @@ fun TvDynamicBubbleView(
                         onModeChange(OverlayDisplayMode.MINIMIZED_BUBBLE)
                         Toast.makeText(context, "Closed apps & toggled to TV Home", Toast.LENGTH_SHORT).show()
                         onHomeAction()
-                    }
+                    },
+                    onMoveKeyboard = onMoveKeyboard
                 )
             }
         }
@@ -698,7 +701,7 @@ fun ExpandedRemotePanel(
 }
 
 /**
- * Custom Floating Keyboard with configurable panel opacity
+ * Custom Floating Keyboard with configurable panel opacity and directional position movement
  */
 @Composable
 fun FloatingKeyboardView(
@@ -708,7 +711,8 @@ fun FloatingKeyboardView(
     onInteraction: () -> Unit,
     onBackToPanel: () -> Unit,
     onCloseKeyboard: () -> Unit,
-    onHomeAction: () -> Unit = {}
+    onHomeAction: () -> Unit = {},
+    onMoveKeyboard: (KeyboardMoveDirection) -> Unit = {}
 ) {
     FloatingKeyboardScreen(
         keyboardState = keyboardState,
@@ -717,7 +721,8 @@ fun FloatingKeyboardView(
         onInteraction = onInteraction,
         onBackToPanel = onBackToPanel,
         onCloseKeyboard = onCloseKeyboard,
-        onHomeAction = onHomeAction
+        onHomeAction = onHomeAction,
+        onMoveKeyboard = onMoveKeyboard
     )
 }
 

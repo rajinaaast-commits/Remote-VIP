@@ -24,15 +24,23 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.unit.IntOffset
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.accessibility.InputDetectionState
+import com.example.accessibility.TvInputDetector
+import com.example.keyboard.KeyboardMoveDirection
+import kotlin.math.roundToInt
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -82,6 +90,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.accessibility.AuraAccessibilityService
@@ -143,6 +152,13 @@ fun TvDashboardScreen(
     val prefs = remember { context.getSharedPreferences(AuraOverlayService.PREFS_NAME, Context.MODE_PRIVATE) }
     var bubbleOpacity by remember { mutableFloatStateOf(prefs.getFloat(AuraOverlayService.KEY_BUBBLE_OPACITY, 0.90f)) }
     var keyboardOpacity by remember { mutableFloatStateOf(prefs.getFloat(AuraOverlayService.KEY_KEYBOARD_OPACITY, 0.90f)) }
+    var isAutoKeyboardEnabled by remember { mutableStateOf(prefs.getBoolean(AuraOverlayService.KEY_AUTO_SHOW_KEYBOARD, true)) }
+    val detectionState by TvInputDetector.detectionState.collectAsStateWithLifecycle()
+
+    fun toggleAutoKeyboard(enabled: Boolean) {
+        isAutoKeyboardEnabled = enabled
+        prefs.edit().putBoolean(AuraOverlayService.KEY_AUTO_SHOW_KEYBOARD, enabled).apply()
+    }
 
     fun updateBubbleOpacity(newVal: Float) {
         val clamped = (kotlin.math.round(newVal * 100) / 100f).coerceIn(0.20f, 1.0f)
@@ -332,6 +348,9 @@ fun TvDashboardScreen(
                     isOverlayActive = isOverlayActive,
                     bubbleOpacity = bubbleOpacity,
                     keyboardOpacity = keyboardOpacity,
+                    detectionState = detectionState,
+                    isAutoKeyboardEnabled = isAutoKeyboardEnabled,
+                    onToggleAutoKeyboard = ::toggleAutoKeyboard,
                     onBubbleOpacityChange = ::updateBubbleOpacity,
                     onKeyboardOpacityChange = ::updateKeyboardOpacity,
                     onModeChange = {
@@ -378,6 +397,9 @@ fun RemoteLabTab(
     isOverlayActive: Boolean,
     bubbleOpacity: Float,
     keyboardOpacity: Float,
+    detectionState: InputDetectionState,
+    isAutoKeyboardEnabled: Boolean,
+    onToggleAutoKeyboard: (Boolean) -> Unit,
     onBubbleOpacityChange: (Float) -> Unit,
     onKeyboardOpacityChange: (Float) -> Unit,
     onModeChange: (OverlayDisplayMode) -> Unit,
@@ -385,6 +407,22 @@ fun RemoteLabTab(
     onLaunchOverlay: () -> Unit
 ) {
     val context = LocalContext.current
+    var previewOffsetX by remember { mutableFloatStateOf(0f) }
+    var previewOffsetY by remember { mutableFloatStateOf(0f) }
+
+    fun handleMove(direction: KeyboardMoveDirection) {
+        when (direction) {
+            KeyboardMoveDirection.LEFT -> previewOffsetX = (previewOffsetX - 50f).coerceAtLeast(-160f)
+            KeyboardMoveDirection.RIGHT -> previewOffsetX = (previewOffsetX + 50f).coerceAtMost(160f)
+            KeyboardMoveDirection.UP -> previewOffsetY = (previewOffsetY - 40f).coerceAtLeast(-100f)
+            KeyboardMoveDirection.DOWN -> previewOffsetY = (previewOffsetY + 40f).coerceAtMost(100f)
+            KeyboardMoveDirection.CENTER -> {
+                previewOffsetX = 0f
+                previewOffsetY = 0f
+            }
+        }
+        AuraOverlayService.moveCurrentKeyboard(direction)
+    }
 
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -477,12 +515,19 @@ fun RemoteLabTab(
                         },
                         onModeChange = onModeChange,
                         onResetPosition = {
+                            previewOffsetX = 0f
+                            previewOffsetY = 0f
                             Toast.makeText(context, "Position Reset (simulated x=80, y=80)", Toast.LENGTH_SHORT).show()
                         },
                         onCloseService = {
                             onModeChange(OverlayDisplayMode.MINIMIZED_BUBBLE)
                         },
-                        onInteraction = onInteraction
+                        onInteraction = onInteraction,
+                        onMoveKeyboard = { direction ->
+                            onInteraction()
+                            handleMove(direction)
+                        },
+                        modifier = Modifier.offset { IntOffset(previewOffsetX.roundToInt(), previewOffsetY.roundToInt()) }
                     )
                 }
 
@@ -517,6 +562,221 @@ fun RemoteLabTab(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Auto-Detect TV Input Fields Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AuraSurfaceDark),
+                border = BorderStroke(1.dp, if (detectionState.isInputActive) AuraGreen else AuraCyanNeon.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Keyboard,
+                                contentDescription = "Input Detector",
+                                tint = if (detectionState.isInputActive) AuraGreen else AuraCyanNeon,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "AUTO-DETECT INPUT FIELDS",
+                                color = if (detectionState.isInputActive) AuraGreen else AuraCyanNeon,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (detectionState.isInputActive) AuraGreen.copy(alpha = 0.2f) else AuraCardDark)
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = if (detectionState.isInputActive) "INPUT ACTIVE" else if (isAutoKeyboardEnabled) "LISTENING" else "DISABLED",
+                                color = if (detectionState.isInputActive) AuraGreen else if (isAutoKeyboardEnabled) AuraCyanNeon else AuraTextMuted,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Detects active text & search fields across TV apps (YouTube, Netflix, Browser) and automatically shows the custom floating keyboard.",
+                        color = AuraTextSecondary,
+                        fontSize = 11.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Status and last detected app
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF0D172A))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "Last TV Input Field:",
+                            color = AuraTextMuted,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = detectionState.lastPackageName.ifEmpty { "None detected yet" },
+                            color = AuraTextPrimary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 160.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        TvRemoteButton(
+                            text = if (isAutoKeyboardEnabled) "AUTO-SHOW: ON" else "AUTO-SHOW: OFF",
+                            isAccent = isAutoKeyboardEnabled,
+                            isSmall = true,
+                            onClick = { onToggleAutoKeyboard(!isAutoKeyboardEnabled) },
+                            modifier = Modifier.weight(1f),
+                            testTag = "btn_toggle_auto_keyboard"
+                        )
+                        TvRemoteButton(
+                            text = "⚡ TEST TRIGGER",
+                            isSecondary = true,
+                            isSmall = true,
+                            onClick = {
+                                TvInputDetector.simulateInputFocus(context, "YouTube TV Search")
+                                Toast.makeText(context, "Simulated TV Input Focus! Keyboard triggered.", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1.2f),
+                            testTag = "btn_test_auto_trigger"
+                        )
+                    }
+                }
+            }
+
+            // Keyboard Position & Screen Movement Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AuraSurfaceDark),
+                border = BorderStroke(1.dp, AuraCyanNeon.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.DeveloperBoard,
+                                contentDescription = "Move Keyboard",
+                                tint = AuraCyanNeon,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "MOVE KEYBOARD POSITION",
+                                color = AuraCyanNeon,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            text = "4-WAY MOVER",
+                            color = AuraCyanGlow,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Move floating keyboard Right, Left, Up, or Down on screen to avoid blocking video playback or search boxes.",
+                        color = AuraTextSecondary,
+                        fontSize = 11.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // D-Pad Movement Cluster
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // UP
+                        TvRemoteButton(
+                            text = "▲ UP",
+                            isSmall = true,
+                            isSecondary = true,
+                            onClick = { handleMove(KeyboardMoveDirection.UP) },
+                            modifier = Modifier.width(110.dp),
+                            testTag = "btn_dash_move_up"
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // LEFT, CENTER, RIGHT
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TvRemoteButton(
+                                text = "◀ LEFT",
+                                isSmall = true,
+                                isSecondary = true,
+                                onClick = { handleMove(KeyboardMoveDirection.LEFT) },
+                                modifier = Modifier.width(90.dp),
+                                testTag = "btn_dash_move_left"
+                            )
+                            TvRemoteButton(
+                                text = "⌖ CENTER",
+                                isSmall = true,
+                                isAccent = true,
+                                onClick = { handleMove(KeyboardMoveDirection.CENTER) },
+                                modifier = Modifier.width(90.dp),
+                                testTag = "btn_dash_move_center"
+                            )
+                            TvRemoteButton(
+                                text = "RIGHT ▶",
+                                isSmall = true,
+                                isSecondary = true,
+                                onClick = { handleMove(KeyboardMoveDirection.RIGHT) },
+                                modifier = Modifier.width(90.dp),
+                                testTag = "btn_dash_move_right"
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // DOWN
+                        TvRemoteButton(
+                            text = "▼ DOWN",
+                            isSmall = true,
+                            isSecondary = true,
+                            onClick = { handleMove(KeyboardMoveDirection.DOWN) },
+                            modifier = Modifier.width(110.dp),
+                            testTag = "btn_dash_move_down"
+                        )
+                    }
+                }
+            }
+
             // Opacity & Transparency Controls Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = AuraSurfaceDark),
