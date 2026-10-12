@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -45,7 +46,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,7 +60,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,6 +70,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -110,7 +117,15 @@ fun TvDynamicBubbleView(
     volumeController: TvVolumeController,
     bubbleOpacity: Float = 0.90f,
     keyboardOpacity: Float = 0.90f,
+    gestureFeedback: String? = null,
     onHomeAction: () -> Unit = {},
+    onSwipeUp: () -> Unit = {},
+    onSwipeDown: () -> Unit = {},
+    onSwipeLeft: () -> Unit = {},
+    onSwipeRight: () -> Unit = {},
+    onMediaNext: () -> Unit = {},
+    onMediaPrev: () -> Unit = {},
+    onMediaPlayPause: () -> Unit = {},
     onModeChange: (OverlayDisplayMode) -> Unit,
     onResetPosition: () -> Unit,
     onCloseService: () -> Unit,
@@ -128,6 +143,7 @@ fun TvDynamicBubbleView(
             OverlayDisplayMode.MINIMIZED_BUBBLE -> {
                 DynamicCapsuleBubble(
                     bubbleOpacity = bubbleOpacity,
+                    gestureFeedback = gestureFeedback,
                     onExpand = {
                         onInteraction()
                         onModeChange(OverlayDisplayMode.EXPANDED_PANEL)
@@ -137,6 +153,22 @@ fun TvDynamicBubbleView(
                         val success = AuraAccessibilityService.performHomeAction(context)
                         Toast.makeText(context, "Closed apps & toggled to TV Home", Toast.LENGTH_SHORT).show()
                         onHomeAction()
+                    },
+                    onSwipeUp = {
+                        onInteraction()
+                        onSwipeUp()
+                    },
+                    onSwipeDown = {
+                        onInteraction()
+                        onSwipeDown()
+                    },
+                    onSwipeLeft = {
+                        onInteraction()
+                        onSwipeLeft()
+                    },
+                    onSwipeRight = {
+                        onInteraction()
+                        onSwipeRight()
                     }
                 )
             }
@@ -185,6 +217,18 @@ fun TvDynamicBubbleView(
                             Toast.makeText(context, "Dispatched TV Back action", Toast.LENGTH_SHORT).show()
                         }
                     },
+                    onMediaNext = {
+                        onInteraction()
+                        onMediaNext()
+                    },
+                    onMediaPrev = {
+                        onInteraction()
+                        onMediaPrev()
+                    },
+                    onMediaPlayPause = {
+                        onInteraction()
+                        onMediaPlayPause()
+                    },
                     onResetPosition = {
                         onInteraction()
                         onResetPosition()
@@ -223,17 +267,25 @@ fun TvDynamicBubbleView(
 }
 
 /**
- * Minimized iOS Dynamic Bubble (Pill / Capsule) with Direct 1-Click TV Home Button
+ * Minimized iOS Dynamic Bubble (Pill / Capsule) with Gesture Support & Direct 1-Click TV Home Button
  */
 @Composable
 fun DynamicCapsuleBubble(
     bubbleOpacity: Float = 0.90f,
+    gestureFeedback: String? = null,
     onExpand: () -> Unit,
-    onHomeAction: () -> Unit = {}
+    onHomeAction: () -> Unit = {},
+    onSwipeUp: () -> Unit = {},
+    onSwipeDown: () -> Unit = {},
+    onSwipeLeft: () -> Unit = {},
+    onSwipeRight: () -> Unit = {}
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+
+    var dragAccumX by remember { mutableFloatStateOf(0f) }
+    var dragAccumY by remember { mutableFloatStateOf(0f) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "AuraPulse")
     val pulseAlpha by infiniteTransition.animateFloat(
@@ -250,17 +302,39 @@ fun DynamicCapsuleBubble(
         shape = RoundedCornerShape(28.dp),
         color = Color(0xFF0A0F1D).copy(alpha = bubbleOpacity.coerceIn(0.2f, 1f)), // Configurable opacity
         border = BorderStroke(
-            width = if (isFocused || isHovered) 2.5.dp else 1.5.dp,
-            brush = if (isFocused || isHovered) {
+            width = if (isFocused || isHovered || gestureFeedback != null) 2.5.dp else 1.5.dp,
+            brush = if (isFocused || isHovered || gestureFeedback != null) {
                 Brush.horizontalGradient(listOf(AuraCyanNeon, Color.White, AuraCyanNeon))
             } else {
                 Brush.horizontalGradient(listOf(AuraCyanDim, AuraCyanGlow))
             }
         ),
-        shadowElevation = if (isFocused || isHovered) 16.dp else 8.dp,
+        shadowElevation = if (isFocused || isHovered || gestureFeedback != null) 16.dp else 8.dp,
         modifier = Modifier
             .testTag("dynamic_bubble_capsule")
             .shadow(12.dp, RoundedCornerShape(28.dp))
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = {
+                        dragAccumX = 0f
+                        dragAccumY = 0f
+                    },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        dragAccumX += dragAmount.x
+                        dragAccumY += dragAmount.y
+                    },
+                    onDragEnd = {
+                        val absX = kotlin.math.abs(dragAccumX)
+                        val absY = kotlin.math.abs(dragAccumY)
+                        if (absY > 25f && absY > absX * 1.15f) {
+                            if (dragAccumY < 0) onSwipeUp() else onSwipeDown()
+                        } else if (absX > 25f && absX > absY * 1.15f) {
+                            if (dragAccumX > 0) onSwipeRight() else onSwipeLeft()
+                        }
+                    }
+                )
+            }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -280,41 +354,67 @@ fun DynamicCapsuleBubble(
                     .focusable(interactionSource = interactionSource)
                     .padding(horizontal = 6.dp, vertical = 4.dp)
             ) {
-                // Pulsing Cyan TV Aura Dot
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(AuraCyanNeon.copy(alpha = pulseAlpha))
-                )
+                if (gestureFeedback != null) {
+                    // Animated Gesture HUD Badge
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(AuraCyanGlow)
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(AuraCyanNeon)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = gestureFeedback,
+                            color = AuraCyanNeon,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+                } else {
+                    // Default Capsule pill branding
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(AuraCyanNeon.copy(alpha = pulseAlpha))
+                    )
 
-                Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
 
-                Icon(
-                    imageVector = Icons.Default.Tv,
-                    contentDescription = "Aura TV Remote",
-                    tint = AuraCyanNeon,
-                    modifier = Modifier.size(20.dp)
-                )
+                    Icon(
+                        imageVector = Icons.Default.Tv,
+                        contentDescription = "Aura TV Remote",
+                        tint = AuraCyanNeon,
+                        modifier = Modifier.size(20.dp)
+                    )
 
-                Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
 
-                Text(
-                    text = "AURA",
-                    color = AuraTextPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
+                    Text(
+                        text = "AURA",
+                        color = AuraTextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
 
-                Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
 
-                Icon(
-                    imageVector = Icons.Default.Keyboard,
-                    contentDescription = "Keyboard available",
-                    tint = AuraCyanDim,
-                    modifier = Modifier.size(15.dp)
-                )
+                    Icon(
+                        imageVector = Icons.Default.Keyboard,
+                        contentDescription = "Keyboard available",
+                        tint = AuraCyanDim,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(4.dp))
@@ -380,6 +480,9 @@ fun ExpandedRemotePanel(
     onMinimize: () -> Unit,
     onHomeAction: () -> Unit,
     onTvBackAction: () -> Unit,
+    onMediaNext: () -> Unit = {},
+    onMediaPrev: () -> Unit = {},
+    onMediaPlayPause: () -> Unit = {},
     onResetPosition: () -> Unit,
     onCloseService: () -> Unit
 ) {

@@ -12,6 +12,9 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout repository
@@ -54,12 +57,86 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
+          validate-wrappers: false
+
+      - name: Prepare Android SDK and environment
+        run: |
+          echo "=== Android SDK & Environment Setup ==="
+          if [ -f "./.env.example" ] && [ ! -f "./.env" ]; then
+            echo "Creating .env from .env.example..."
+            cp ./.env.example ./.env
+          fi
+
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+
+          # Fix runner permissions on Android SDK directory
+          if [ -d "$ANDROID_HOME" ]; then
+            sudo chown -R "$USER":"$USER" "$ANDROID_HOME" 2>/dev/null || true
+            sudo chmod -R u+w "$ANDROID_HOME" 2>/dev/null || true
+          fi
+
+          # Accept and pre-populate all standard SDK licenses
+          mkdir -p "$ANDROID_HOME/licenses"
+          cat << 'EOF' > "$ANDROID_HOME/licenses/android-sdk-license"
+24333f8a63b6825ea9c5514f83c2829b004d1fee
+d56f5187479451eabf01fb78af6dfcb131a6481e
+89337a07077026e6e22a30564f2257c7ff11432a
+601085b94cd77f0b54ff86406957099fed80721d
+EOF
+          cat << 'EOF' > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+84831b9409646a247e3073db4080447aa45d715a
+799f227c33e73674f883219714c4173c45abb678
+EOF
+          cat << 'EOF' > "$ANDROID_HOME/licenses/android-sdk-arm-dbt-license"
+859f317696f67ef3d7f30a50a5560e7834b43903
+EOF
+
+          # Locate sdkmanager
+          SDKMANAGER_BIN=""
+          if command -v sdkmanager >/dev/null 2>&1; then
+            SDKMANAGER_BIN="sdkmanager"
+          elif [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER_BIN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          else
+            FOUND_BIN=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f -perm /111 2>/dev/null | head -n 1)
+            if [ -n "$FOUND_BIN" ]; then
+              SDKMANAGER_BIN="$FOUND_BIN"
+            fi
+          fi
+
+          if [ -n "$SDKMANAGER_BIN" ]; then
+            echo "Using sdkmanager at: $SDKMANAGER_BIN"
+            yes | "$SDKMANAGER_BIN" --licenses 2>/dev/null || true
+            "$SDKMANAGER_BIN" "platforms;android-36" "platforms;android-36.1" "build-tools;36.0.0" 2>/dev/null || true
+          else
+            echo "Warning: sdkmanager not found, relying on pre-installed SDK and automatic downloads."
+          fi
+
+          # Ensure platforms directory has both android-36 and android-36.1 for AGP 9.1.1
+          mkdir -p "$ANDROID_HOME/platforms"
+          if [ -d "$ANDROID_HOME/platforms/android-36" ] && [ ! -d "$ANDROID_HOME/platforms/android-36.1" ]; then
+            echo "Linking android-36 to android-36.1 for compileSdk 36.1..."
+            cp -r "$ANDROID_HOME/platforms/android-36" "$ANDROID_HOME/platforms/android-36.1"
+            if [ -f "$ANDROID_HOME/platforms/android-36.1/source.properties" ]; then
+              sed -i 's/AndroidVersion.ApiLevel=36/AndroidVersion.ApiLevel=36.1/' "$ANDROID_HOME/platforms/android-36.1/source.properties" || true
+            fi
+          elif [ -d "$ANDROID_HOME/platforms/android-36.1" ] && [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then
+            echo "Linking android-36.1 to android-36..."
+            cp -r "$ANDROID_HOME/platforms/android-36.1" "$ANDROID_HOME/platforms/android-36"
+          fi
+
+          echo "Available platforms:"
+          ls -la "$ANDROID_HOME/platforms" || true
 
       - name: Create temporary debug keystore
         run: |
           echo "=== Temporary Debug Keystore Check ==="
           if [ -f "./debug.keystore" ]; then
-            echo "debug.keystore already exists."
+            echo "./debug.keystore already exists."
+          elif [ -f "./debug.keystore.base64" ]; then
+            echo "Restoring debug.keystore from debug.keystore.base64..."
+            base64 -d ./debug.keystore.base64 > ./debug.keystore
           else
             echo "Generating temporary debug.keystore using Java 17 keytool..."
             keytool -genkeypair \
@@ -85,7 +162,7 @@ jobs:
         run: |
           gradle :app:assembleDebug --stacktrace --no-daemon
 
-      - name: Verify debug APK
+      - name: Verify the APK
         run: |
           echo "=== APK Verification ==="
           TARGET_APK="app/build/outputs/apk/debug/app-debug.apk"
