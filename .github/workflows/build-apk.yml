@@ -90,29 +90,21 @@ jobs:
           sudo chown -R "$USER":"$USER" "$SDK_DIR/licenses" "$SDK_DIR/platforms" "$SDK_DIR/build-tools" 2>/dev/null || true
           sudo chmod -R 777 "$SDK_DIR/licenses" "$SDK_DIR/platforms" "$SDK_DIR/build-tools" 2>/dev/null || true
 
-          # Populate standard Android SDK licenses
-          cat << 'EOF' > "$SDK_DIR/licenses/android-sdk-license"
-24333f8a63b6825ea9c5514f83c2829b004d1fee
-d56f5187479451eabf01fb78af6dfcb131a6481e
-89337a07077026e6e22a30564f2257c7ff11432a
-601085b94cd77f0b54ff86406957099fed80721d
-EOF
-          cat << 'EOF' > "$SDK_DIR/licenses/android-sdk-preview-license"
-84831b9409646a247e3073db4080447aa45d715a
-799f227c33e73674f883219714c4173c45abb678
-EOF
-          cat << 'EOF' > "$SDK_DIR/licenses/android-sdk-arm-dbt-license"
-859f317696f67ef3d7f30a50a5560e7834b43903
-EOF
-          cat << 'EOF' > "$SDK_DIR/licenses/intel-android-extra-license"
-d975f751698a77b662f1254ddbeed3901e1ad6f6
-EOF
-          cat << 'EOF' > "$SDK_DIR/licenses/mips-android-sysimage-license"
-e9acab5b5fbb560a72cfa4f69c30ed2e0d606268
-EOF
-          cat << 'EOF' > "$SDK_DIR/licenses/google-gdk-license"
-33b6a2b64607f11b759f320ef9dff4ae5c47d97a
-EOF
+          # Populate standard Android SDK licenses using printf with clean indentation
+          printf "%s\n" \
+            "24333f8a63b6825ea9c5514f83c2829b004d1fee" \
+            "d56f5187479451eabf01fb78af6dfcb131a6481e" \
+            "89337a07077026e6e22a30564f2257c7ff11432a" \
+            "601085b94cd77f0b54ff86406957099fed80721d" > "$SDK_DIR/licenses/android-sdk-license"
+
+          printf "%s\n" \
+            "84831b9409646a247e3073db4080447aa45d715a" \
+            "799f227c33e73674f883219714c4173c45abb678" > "$SDK_DIR/licenses/android-sdk-preview-license"
+
+          printf "%s\n" "859f317696f67ef3d7f30a50a5560e7834b43903" > "$SDK_DIR/licenses/android-sdk-arm-dbt-license"
+          printf "%s\n" "d975f751698a77b662f1254ddbeed3901e1ad6f6" > "$SDK_DIR/licenses/intel-android-extra-license"
+          printf "%s\n" "e9acab5b5fbb560a72cfa4f69c30ed2e0d606268" > "$SDK_DIR/licenses/mips-android-sysimage-license"
+          printf "%s\n" "33b6a2b64607f11b759f320ef9dff4ae5c47d97a" > "$SDK_DIR/licenses/google-gdk-license"
 
           # Locate sdkmanager binary
           SDKMANAGER_BIN=""
@@ -295,22 +287,22 @@ EOF
 
           echo "Publishing release '$RELEASE_TITLE' with tag '$TAG_NAME'..."
 
-          NOTES_CONTENT=$(cat <<EOF
-### Android Debug APK Build
-
-- **Build Source:** Built automatically by GitHub Actions CI/CD.
-- **Workflow Run Number:** #${{ github.run_number }}
-- **Workflow Run Attempt:** ${{ github.run_attempt }}
-- **Commit SHA:** \`${{ github.sha }}\`
-- **APK Asset Filename:** \`${ASSET_NAME}\`
-- **Notice:** This APK is an automatically generated debug build intended for testing. It is signed with a temporary debug keystore and is not an official Google Play Store production release.
-EOF
-          )
+          NOTES_FILE="${{ runner.temp }}/release_notes.md"
+          {
+            echo "### Android Debug APK Build"
+            echo ""
+            echo "- **Build Source:** Built automatically by GitHub Actions CI/CD."
+            echo "- **Workflow Run Number:** #${{ github.run_number }}"
+            echo "- **Workflow Run Attempt:** ${{ github.run_attempt }}"
+            echo "- **Commit SHA:** \`${{ github.sha }}\`"
+            echo "- **APK Asset Filename:** \`${ASSET_NAME}\`"
+            echo "- **Notice:** This APK is an automatically generated debug build intended for testing. It is signed with a temporary debug keystore and is not an official Google Play Store production release."
+          } > "$NOTES_FILE"
 
           gh release create "$TAG_NAME" "$ASSET_PATH" \
             --target "${{ github.sha }}" \
             --title "$RELEASE_TITLE" \
-            --notes "$NOTES_CONTENT" \
+            --notes-file "$NOTES_FILE" \
             --latest
 
       - name: Report APK download result
