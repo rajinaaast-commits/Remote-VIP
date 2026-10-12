@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Aura Remote</string>
+    <string name="accessibility_description">Enables Aura Remote to trigger the Back navigation button for active TV applications from the floating overlay.</string>
+    <string name="overlay_notification_title">Aura TV Assistant Active</string>
+    <string name="overlay_notification_text">Floating dynamic bubble is active on your Haier TV.</string>
+    <string name="ime_label">Aura TV Floating Keyboard</string>
+</resources>

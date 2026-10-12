@@ -1,0 +1,6 @@
+{
+  "name": "Aura Remote",
+  "description": "Native Android TV floating remote assistant with dynamic bubble, volume controls, and custom floating keyboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

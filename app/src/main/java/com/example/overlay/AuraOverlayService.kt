@@ -1,0 +1,378 @@
+package com.example.overlay
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.graphics.PixelFormat
+import android.os.Build
+import android.os.IBinder
+import android.provider.Settings
+import android.util.Log
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.example.MainActivity
+import com.example.R
+import com.example.accessibility.AuraAccessibilityService
+import com.example.keyboard.FloatingKeyboardState
+import com.example.ui.theme.AuraRemoteTheme
+import com.example.ui.OverlayDisplayMode
+import com.example.ui.TvDynamicBubbleView
+import com.example.volume.TvVolumeController
+import com.example.volume.VolumeStatus
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+
+class AuraOverlayService : Service() {
+
+    private var windowManager: WindowManager? = null
+    private var overlayContainer: View? = null
+    private var layoutParams: WindowManager.LayoutParams? = null
+    private var lifecycleOwner: OverlayLifecycleOwner? = null
+
+    private lateinit var prefs: SharedPreferences
+    private lateinit var volumeController: TvVolumeController
+    private val keyboardState = FloatingKeyboardState()
+    private var prefListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    private var displayMode by mutableStateOf(OverlayDisplayMode.MINIMIZED_BUBBLE)
+    private var secondsRemaining by mutableIntStateOf(30)
+    private var bubbleOpacity by mutableFloatStateOf(0.90f)
+    private var keyboardOpacity by mutableFloatStateOf(0.90f)
+    private var volumeStatus by mutableStateOf(
+        VolumeStatus(0, 100, 0, false, false, "Ready")
+    )
+
+    private val serviceJob = Job()
+    private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
+    private var timerJob: Job? = null
+
+    companion object {
+        private const val TAG = "AuraOverlayService"
+        private const val CHANNEL_ID = "aura_tv_remote_channel"
+        private const val NOTIFICATION_ID = 4031
+        const val PREFS_NAME = "aura_remote_overlay_prefs"
+        const val KEY_POS_X = "overlay_x"
+        const val KEY_POS_Y = "overlay_y"
+        const val KEY_BUBBLE_OPACITY = "bubble_opacity"
+        const val KEY_KEYBOARD_OPACITY = "keyboard_opacity"
+
+        var isRunning: Boolean = false
+            private set
+
+        fun start(context: Context) {
+            val intent = Intent(context, AuraOverlayService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stop(context: Context) {
+            val intent = Intent(context, AuraOverlayService::class.java)
+            context.stopService(intent)
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        isRunning = true
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        bubbleOpacity = prefs.getFloat(KEY_BUBBLE_OPACITY, 0.90f)
+        keyboardOpacity = prefs.getFloat(KEY_KEYBOARD_OPACITY, 0.90f)
+
+        prefListener = SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
+            if (key == KEY_BUBBLE_OPACITY) {
+                bubbleOpacity = sp.getFloat(KEY_BUBBLE_OPACITY, 0.90f)
+            } else if (key == KEY_KEYBOARD_OPACITY) {
+                keyboardOpacity = sp.getFloat(KEY_KEYBOARD_OPACITY, 0.90f)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(prefListener)
+
+        volumeController = TvVolumeController(this)
+        volumeStatus = volumeController.getStatus()
+
+        startAsForeground()
+
+        if (!Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "SYSTEM_ALERT_WINDOW permission not granted. Stopping service.")
+            stopSelf()
+            return
+        }
+
+        initOverlayView()
+    }
+
+    private fun startAsForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Aura TV Remote Floating Assistant",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps the dynamic floating bubble active above TV apps"
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+
+        val launchIntent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            launchIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.overlay_notification_title))
+            .setContentText(getString(R.string.overlay_notification_text))
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    private fun initOverlayView() {
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (windowManager == null) {
+            Log.e(TAG, "WindowManager unavailable")
+            stopSelf()
+            return
+        }
+
+        lifecycleOwner = OverlayLifecycleOwner().apply { start() }
+
+        val initialX = prefs.getInt(KEY_POS_X, 80)
+        val initialY = prefs.getInt(KEY_POS_Y, 80)
+
+        layoutParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = initialX
+            y = initialY
+        }
+
+        val composeView = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+
+            setContent {
+                AuraRemoteTheme {
+                    TvDynamicBubbleView(
+                        mode = displayMode,
+                        secondsRemaining = secondsRemaining,
+                        volumeStatus = volumeStatus,
+                        keyboardState = keyboardState,
+                        volumeController = volumeController,
+                        bubbleOpacity = bubbleOpacity,
+                        keyboardOpacity = keyboardOpacity,
+                        onHomeAction = {
+                            resetInactivityTimer()
+                            AuraAccessibilityService.performHomeAction(this@AuraOverlayService)
+                            handleModeChange(OverlayDisplayMode.MINIMIZED_BUBBLE)
+                        },
+                        onModeChange = { newMode ->
+                            handleModeChange(newMode)
+                        },
+                        onResetPosition = {
+                            resetBubblePosition()
+                        },
+                        onCloseService = {
+                            stopSelf()
+                        },
+                        onInteraction = {
+                            resetInactivityTimer()
+                        }
+                    )
+                }
+            }
+        }
+
+        // Attach Mouse Drag vs Click TouchListener
+        setupDragTouchListener(composeView)
+
+        overlayContainer = composeView
+        try {
+            windowManager?.addView(overlayContainer, layoutParams)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add overlay view to WindowManager", e)
+            stopSelf()
+        }
+    }
+
+    private fun setupDragTouchListener(view: View) {
+        var startX = 0
+        var startY = 0
+        var touchStartX = 0f
+        var touchStartY = 0f
+        var isDragging = false
+
+        view.setOnTouchListener { v, event ->
+            val params = layoutParams ?: return@setOnTouchListener false
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = params.x
+                    startY = params.y
+                    touchStartX = event.rawX
+                    touchStartY = event.rawY
+                    isDragging = false
+                    false // Don't consume down yet so clicks can trigger if not dragged
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - touchStartX).toInt()
+                    val dy = (event.rawY - touchStartY).toInt()
+                    if (abs(dx) > 12 || abs(dy) > 12) {
+                        isDragging = true
+                        params.x = startX + dx
+                        params.y = startY + dy
+                        try {
+                            windowManager?.updateViewLayout(overlayContainer, params)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "updateViewLayout move error", e)
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (isDragging) {
+                        // Persist position
+                        prefs.edit()
+                            .putInt(KEY_POS_X, params.x)
+                            .putInt(KEY_POS_Y, params.y)
+                            .apply()
+                        true
+                    } else {
+                        false // Pass click to Compose buttons
+                    }
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun handleModeChange(newMode: OverlayDisplayMode) {
+        displayMode = newMode
+        resetInactivityTimer()
+
+        val params = layoutParams ?: return
+        when (newMode) {
+            OverlayDisplayMode.MINIMIZED_BUBBLE -> {
+                // Background apps should receive D-pad focus
+                params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                stopTimer()
+            }
+            OverlayDisplayMode.EXPANDED_PANEL -> {
+                params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                startTimer()
+            }
+            OverlayDisplayMode.FLOATING_KEYBOARD -> {
+                // When keyboard is open, allow focus so D-pad and text clicks receive focus
+                params.flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                startTimer()
+            }
+        }
+
+        try {
+            windowManager?.updateViewLayout(overlayContainer, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update layout params for mode change", e)
+        }
+    }
+
+    private fun startTimer() {
+        stopTimer()
+        secondsRemaining = 30
+        timerJob = serviceScope.launch {
+            while (isActive && secondsRemaining > 0) {
+                delay(1000L)
+                secondsRemaining--
+            }
+            if (secondsRemaining <= 0 && displayMode != OverlayDisplayMode.MINIMIZED_BUBBLE) {
+                handleModeChange(OverlayDisplayMode.MINIMIZED_BUBBLE)
+            }
+        }
+    }
+
+    private fun stopTimer() {
+        timerJob?.cancel()
+        timerJob = null
+    }
+
+    private fun resetInactivityTimer() {
+        secondsRemaining = 30
+        volumeStatus = volumeController.getStatus()
+        if (displayMode != OverlayDisplayMode.MINIMIZED_BUBBLE && (timerJob == null || !timerJob!!.isActive)) {
+            startTimer()
+        }
+    }
+
+    private fun resetBubblePosition() {
+        val params = layoutParams ?: return
+        params.x = 80
+        params.y = 80
+        prefs.edit().putInt(KEY_POS_X, 80).putInt(KEY_POS_Y, 80).apply()
+        try {
+            windowManager?.updateViewLayout(overlayContainer, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to reset position", e)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        isRunning = false
+        prefListener?.let { prefs.unregisterOnSharedPreferenceChangeListener(it) }
+        stopTimer()
+        serviceJob.cancel()
+        lifecycleOwner?.destroy()
+        if (overlayContainer != null && windowManager != null) {
+            try {
+                windowManager?.removeView(overlayContainer)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing overlay view in onDestroy", e)
+            }
+            overlayContainer = null
+        }
+    }
+}
