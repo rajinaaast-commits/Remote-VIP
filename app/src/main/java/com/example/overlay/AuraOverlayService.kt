@@ -30,6 +30,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.MainActivity
 import com.example.R
 import com.example.accessibility.AuraAccessibilityService
+import com.example.keyboard.AuraTvInputMethodService
 import com.example.keyboard.FloatingKeyboardState
 import com.example.keyboard.KeyboardMoveDirection
 import com.example.ui.theme.AuraRemoteTheme
@@ -267,6 +268,18 @@ class AuraOverlayService : Service() {
                         onMoveKeyboard = { direction ->
                             resetInactivityTimer()
                             moveKeyboard(direction)
+                        },
+                        onSubmitText = { submitted ->
+                            resetInactivityTimer()
+                            // Commit text into background active TV input field
+                            AuraAccessibilityService.commitTextToActiveField(submitted, this@AuraOverlayService)
+                            if (AuraTvInputMethodService.isImeActive()) {
+                                AuraTvInputMethodService.commitTextFromOverlay(submitted)
+                                AuraTvInputMethodService.sendEnterFromOverlay()
+                            }
+                            AuraAccessibilityService.performEnterAction()
+                            // Auto minimize to bubble so user can see their results
+                            handleModeChange(OverlayDisplayMode.MINIMIZED_BUBBLE)
                         }
                     )
                 }
@@ -291,8 +304,16 @@ class AuraOverlayService : Service() {
         var touchStartX = 0f
         var touchStartY = 0f
         var isDragging = false
+        var lastUpdateTime = 0L
 
-        view.setOnTouchListener { v, event ->
+        view.setOnTouchListener { _, event ->
+            // CRITICAL FIX: Only drag when in MINIMIZED_BUBBLE mode.
+            // When in FLOATING_KEYBOARD or EXPANDED_PANEL, all touches and mouse clicks
+            // are for typing keys, scrolling, and clicking buttons! Never drag or consume!
+            if (displayMode != OverlayDisplayMode.MINIMIZED_BUBBLE) {
+                return@setOnTouchListener false
+            }
+
             val params = layoutParams ?: return@setOnTouchListener false
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -306,14 +327,18 @@ class AuraOverlayService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - touchStartX).toInt()
                     val dy = (event.rawY - touchStartY).toInt()
-                    if (abs(dx) > 12 || abs(dy) > 12) {
+                    if (abs(dx) > 16 || abs(dy) > 16) {
                         isDragging = true
-                        params.x = startX + dx
-                        params.y = startY + dy
-                        try {
-                            windowManager?.updateViewLayout(overlayContainer, params)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "updateViewLayout move error", e)
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (now - lastUpdateTime > 24L) {
+                            lastUpdateTime = now
+                            params.x = startX + dx
+                            params.y = startY + dy
+                            try {
+                                windowManager?.updateViewLayout(overlayContainer, params)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "updateViewLayout move error", e)
+                            }
                         }
                         true
                     } else {
@@ -355,8 +380,9 @@ class AuraOverlayService : Service() {
                 startTimer()
             }
             OverlayDisplayMode.FLOATING_KEYBOARD -> {
-                // When keyboard is open, allow focus so D-pad and text clicks receive focus
-                params.flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                // Keep FLAG_NOT_FOCUSABLE so background apps (YouTube, Netflix, TV Search)
+                // NEVER lose focus from their active input fields! All mouse/touch clicks still work 100%.
+                params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 startTimer()
             }

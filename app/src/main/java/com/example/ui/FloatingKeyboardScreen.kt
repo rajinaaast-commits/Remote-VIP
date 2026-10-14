@@ -53,12 +53,27 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.accessibility.AuraAccessibilityService
+import com.example.keyboard.AuraTvInputMethodService
 import com.example.keyboard.FloatingKeyboardState
 import com.example.keyboard.KeyboardMoveDirection
 import com.example.ui.theme.AuraCardDark
@@ -101,6 +116,50 @@ fun FloatingKeyboardScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+
+    val performSubmit: () -> Unit = {
+        onInteraction()
+        keyboardState.submit { submitted ->
+            // 1. Copy to clipboard for instant paste convenience
+            keyboardState.copyToClipboard(context)
+
+            // 2. Commit text directly to active TV app input field via Accessibility Service
+            var injected = false
+            if (submitted.isNotEmpty()) {
+                injected = AuraAccessibilityService.commitTextToActiveField(submitted, context)
+            }
+
+            // 3. Commit via system Virtual Keyboard if active
+            if (AuraTvInputMethodService.isImeActive()) {
+                val imeOk = AuraTvInputMethodService.commitTextFromOverlay(submitted)
+                AuraTvInputMethodService.sendEnterFromOverlay()
+                if (imeOk) injected = true
+            }
+
+            // 4. Dispatch Enter/Search action to the focused input field
+            AuraAccessibilityService.performEnterAction()
+
+            // 5. Notify parent callback (which auto-minimizes bubble)
+            onSubmitText(submitted)
+
+            if (injected) {
+                Toast.makeText(
+                    context,
+                    "✓ Sent \"$submitted\" to TV input field!",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    if (submitted.isNotEmpty())
+                        "Copied \"$submitted\" to clipboard & submitted to TV app"
+                    else
+                        "Enter pressed",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     // Animated blinking cursor (500ms cycle)
     val infiniteTransition = rememberInfiniteTransition(label = "CursorBlink")
@@ -304,7 +363,7 @@ fun FloatingKeyboardScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             // ==========================================================
-            // LIVE TEXT INPUT BOX (Cursor, Text State, Cursor Controls)
+            // LIVE TEXT INPUT BOX (Editable with Mouse, D-pad, Physical Keyboard, & On-Screen Keys)
             // ==========================================================
             Box(
                 modifier = Modifier
@@ -321,55 +380,81 @@ fun FloatingKeyboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        // Current Text with Blinking Cursor
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.weight(1f)
+                        // Editable Input Field with Physical Keyboard Support & Blinking Cursor
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .onKeyEvent { keyEvent ->
+                                    if (keyEvent.type == KeyEventType.KeyDown) {
+                                        when (keyEvent.key) {
+                                            Key.Enter -> {
+                                                performSubmit()
+                                                true
+                                            }
+                                            Key.Backspace -> {
+                                                onInteraction()
+                                                keyboardState.deleteBackward()
+                                                true
+                                            }
+                                            Key.DirectionLeft -> {
+                                                onInteraction()
+                                                keyboardState.moveCursorLeft()
+                                                true
+                                            }
+                                            Key.DirectionRight -> {
+                                                onInteraction()
+                                                keyboardState.moveCursorRight()
+                                                true
+                                            }
+                                            else -> false
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                }
                         ) {
                             val text = keyboardState.text
                             val cursor = keyboardState.cursorPosition.coerceIn(0, text.length)
-                            val textBefore = text.substring(0, cursor)
-                            val textAfter = text.substring(cursor)
 
-                            if (text.isEmpty()) {
-                                Text(
-                                    text = "Click keys with mouse or navigate with TV remote...",
-                                    color = AuraTextMuted,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Normal,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            } else {
-                                Text(
-                                    text = textBefore,
+                            BasicTextField(
+                                value = TextFieldValue(text, TextRange(cursor)),
+                                onValueChange = { tfv ->
+                                    onInteraction()
+                                    keyboardState.setTextDirect(tfv.text, tfv.selection.end)
+                                },
+                                textStyle = TextStyle(
                                     color = AuraTextPrimary,
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     fontFamily = FontFamily.Monospace
-                                )
-                            }
-
-                            // Blinking Cursor Indicator
-                            Box(
+                                ),
+                                cursorBrush = SolidColor(AuraCyanNeon),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(
+                                    onSearch = { performSubmit() },
+                                    onDone = { performSubmit() }
+                                ),
+                                decorationBox = { innerTextField ->
+                                    if (text.isEmpty()) {
+                                        Text(
+                                            text = "Click keys with mouse or type with physical keyboard...",
+                                            color = AuraTextMuted,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            fontFamily = FontFamily.Monospace,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    innerTextField()
+                                },
                                 modifier = Modifier
-                                    .padding(horizontal = 1.dp)
-                                    .width(2.5.dp)
-                                    .height(22.dp)
-                                    .background(AuraCyanNeon.copy(alpha = cursorAlpha))
+                                    .fillMaxWidth()
+                                    .testTag("basic_text_field_editor")
                             )
-
-                            if (text.isNotEmpty()) {
-                                Text(
-                                    text = textAfter,
-                                    color = AuraTextPrimary,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
                         }
+
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         // Cursor Stepping Controls: ◀ Left and Right ▶
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -414,6 +499,13 @@ fun FloatingKeyboardScreen(
                         )
 
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            KeyboardKeyButton(
+                                label = "SEND ➔",
+                                isSmall = true,
+                                isAccent = true,
+                                onClick = performSubmit,
+                                testTag = "kb_btn_send_now"
+                            )
                             KeyboardKeyButton(
                                 label = "COPY",
                                 isSmall = true,
@@ -674,13 +766,7 @@ fun FloatingKeyboardScreen(
                     label = "ENTER ⏎",
                     isAccent = true,
                     modifier = Modifier.weight(1.8f),
-                    onClick = {
-                        onInteraction()
-                        keyboardState.submit { submitted ->
-                            onSubmitText(submitted)
-                            Toast.makeText(context, "Confirmed text: \"$submitted\"", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+                    onClick = performSubmit,
                     testTag = "key_enter"
                 )
             }

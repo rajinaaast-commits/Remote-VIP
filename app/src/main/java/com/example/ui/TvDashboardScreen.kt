@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tv
@@ -62,6 +63,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -71,6 +74,7 @@ import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -410,6 +414,24 @@ fun RemoteLabTab(
     var previewOffsetX by remember { mutableFloatStateOf(0f) }
     var previewOffsetY by remember { mutableFloatStateOf(0f) }
 
+    var testInputText by remember { mutableStateOf("") }
+    var lastCommittedFeedback by remember { mutableStateOf<String?>(null) }
+
+    DisposableEffect(Unit) {
+        AuraAccessibilityService.setInAppInputListener(
+            onInput = { text ->
+                testInputText = text
+                lastCommittedFeedback = "✓ Text Injected: \"$text\""
+            },
+            onEnter = {
+                lastCommittedFeedback = "✓ ENTER / Search action submitted for: \"$testInputText\""
+            }
+        )
+        onDispose {
+            AuraAccessibilityService.setInAppInputListener(null, null)
+        }
+    }
+
     fun handleMove(direction: KeyboardMoveDirection) {
         when (direction) {
             KeyboardMoveDirection.LEFT -> previewOffsetX = (previewOffsetX - 50f).coerceAtLeast(-160f)
@@ -527,6 +549,13 @@ fun RemoteLabTab(
                             onInteraction()
                             handleMove(direction)
                         },
+                        onSubmitText = { submitted ->
+                            onInteraction()
+                            testInputText = submitted
+                            lastCommittedFeedback = "✓ Text Injected: \"$submitted\" (Enter Dispatched!)"
+                            AuraAccessibilityService.commitTextToActiveField(submitted, context)
+                            AuraAccessibilityService.performEnterAction()
+                        },
                         modifier = Modifier.offset { IntOffset(previewOffsetX.roundToInt(), previewOffsetY.roundToInt()) }
                     )
                 }
@@ -562,6 +591,128 @@ fun RemoteLabTab(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Interactive TV Search / Input Box Test Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AuraSurfaceDark),
+                border = BorderStroke(1.5.dp, if (testInputText.isNotEmpty()) AuraGreen else AuraCyanNeon),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_interactive_test_input")
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "TV Search Input Box",
+                                tint = AuraCyanNeon,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "TV SEARCH / INPUT BOX TEST",
+                                color = AuraCyanNeon,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        if (testInputText.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(AuraGreen.copy(alpha = 0.2f))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = "TEXT RECEIVED",
+                                    color = AuraGreen,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Click this input box, type with keyboard, or click on-screen keys and hit ENTER ⏎. Text appears here instantly!",
+                        color = AuraTextSecondary,
+                        fontSize = 11.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = testInputText,
+                        onValueChange = {
+                            testInputText = it
+                            keyboardState.setTextDirect(it)
+                        },
+                        placeholder = {
+                            Text(
+                                text = "Click here to test keyboard input...",
+                                color = AuraTextMuted,
+                                fontSize = 14.sp
+                            )
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = AuraTextPrimary,
+                            unfocusedTextColor = AuraTextPrimary,
+                            focusedBorderColor = AuraCyanNeon,
+                            unfocusedBorderColor = AuraCyanDim.copy(alpha = 0.5f),
+                            focusedContainerColor = Color(0xFF090E1A),
+                            unfocusedContainerColor = Color(0xFF090E1A)
+                        ),
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("interactive_test_input_field")
+                    )
+
+                    if (lastCommittedFeedback != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = lastCommittedFeedback!!,
+                            color = AuraGreen,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        TvRemoteButton(
+                            text = "CLEAR INPUT",
+                            isSmall = true,
+                            isSecondary = true,
+                            onClick = {
+                                testInputText = ""
+                                lastCommittedFeedback = null
+                                keyboardState.clear()
+                            },
+                            modifier = Modifier.weight(1f),
+                            testTag = "btn_clear_test_input"
+                        )
+                        TvRemoteButton(
+                            text = "OPEN KEYBOARD",
+                            isSmall = true,
+                            isAccent = true,
+                            onClick = { onModeChange(OverlayDisplayMode.FLOATING_KEYBOARD) },
+                            modifier = Modifier.weight(1f),
+                            testTag = "btn_open_kb_from_test"
+                        )
+                    }
+                }
+            }
+
             // Auto-Detect TV Input Fields Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = AuraSurfaceDark),

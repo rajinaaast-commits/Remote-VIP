@@ -62,6 +62,12 @@ class FloatingKeyboardState {
         lastActionLog = "Input text cleared"
     }
 
+    fun setTextDirect(newText: String, newCursor: Int = newText.length) {
+        text = newText
+        cursorPosition = newCursor.coerceIn(0, newText.length)
+        lastActionLog = "Text updated: \"$newText\""
+    }
+
     fun toggleShift() {
         isShifted = !isShifted
         lastActionLog = if (isShifted) "Shift ON (Uppercase)" else "Shift OFF (Lowercase)"

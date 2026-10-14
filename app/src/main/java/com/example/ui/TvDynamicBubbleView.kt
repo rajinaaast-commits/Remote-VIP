@@ -128,6 +128,7 @@ fun TvDynamicBubbleView(
     onMediaPrev: () -> Unit = {},
     onMediaPlayPause: () -> Unit = {},
     onMoveKeyboard: (KeyboardMoveDirection) -> Unit = {},
+    onSubmitText: (String) -> Unit = {},
     onModeChange: (OverlayDisplayMode) -> Unit,
     onResetPosition: () -> Unit,
     onCloseService: () -> Unit,
@@ -137,9 +138,7 @@ fun TvDynamicBubbleView(
     val context = LocalContext.current
 
     Box(
-        modifier = modifier
-            .wrapContentSize()
-            .animateContentSize(animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing))
+        modifier = modifier.wrapContentSize()
     ) {
         when (mode) {
             OverlayDisplayMode.MINIMIZED_BUBBLE -> {
@@ -149,6 +148,10 @@ fun TvDynamicBubbleView(
                     onExpand = {
                         onInteraction()
                         onModeChange(OverlayDisplayMode.EXPANDED_PANEL)
+                    },
+                    onOpenKeyboard = {
+                        onInteraction()
+                        onModeChange(OverlayDisplayMode.FLOATING_KEYBOARD)
                     },
                     onHomeAction = {
                         onInteraction()
@@ -262,7 +265,8 @@ fun TvDynamicBubbleView(
                         Toast.makeText(context, "Closed apps & toggled to TV Home", Toast.LENGTH_SHORT).show()
                         onHomeAction()
                     },
-                    onMoveKeyboard = onMoveKeyboard
+                    onMoveKeyboard = onMoveKeyboard,
+                    onSubmitText = onSubmitText
                 )
             }
         }
@@ -277,6 +281,7 @@ fun DynamicCapsuleBubble(
     bubbleOpacity: Float = 0.90f,
     gestureFeedback: String? = null,
     onExpand: () -> Unit,
+    onOpenKeyboard: () -> Unit = {},
     onHomeAction: () -> Unit = {},
     onSwipeUp: () -> Unit = {},
     onSwipeDown: () -> Unit = {},
@@ -286,9 +291,6 @@ fun DynamicCapsuleBubble(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
-
-    var dragAccumX by remember { mutableFloatStateOf(0f) }
-    var dragAccumY by remember { mutableFloatStateOf(0f) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "AuraPulse")
     val pulseAlpha by infiniteTransition.animateFloat(
@@ -316,28 +318,6 @@ fun DynamicCapsuleBubble(
         modifier = Modifier
             .testTag("dynamic_bubble_capsule")
             .shadow(12.dp, RoundedCornerShape(28.dp))
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = {
-                        dragAccumX = 0f
-                        dragAccumY = 0f
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        dragAccumX += dragAmount.x
-                        dragAccumY += dragAmount.y
-                    },
-                    onDragEnd = {
-                        val absX = kotlin.math.abs(dragAccumX)
-                        val absY = kotlin.math.abs(dragAccumY)
-                        if (absY > 25f && absY > absX * 1.15f) {
-                            if (dragAccumY < 0) onSwipeUp() else onSwipeDown()
-                        } else if (absX > 25f && absX > absY * 1.15f) {
-                            if (dragAccumX > 0) onSwipeRight() else onSwipeLeft()
-                        }
-                    }
-                )
-            }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -408,15 +388,6 @@ fun DynamicCapsuleBubble(
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp
                     )
-
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    Icon(
-                        imageVector = Icons.Default.Keyboard,
-                        contentDescription = "Keyboard available",
-                        tint = AuraCyanDim,
-                        modifier = Modifier.size(15.dp)
-                    )
                 }
             }
 
@@ -429,6 +400,41 @@ fun DynamicCapsuleBubble(
                     .height(20.dp)
                     .background(AuraCyanDim.copy(alpha = 0.35f))
             )
+
+            Spacer(modifier = Modifier.width(4.dp))
+
+            // Dedicated One-Click Keyboard Button directly on the bubble:
+            // Instantly opens the floating keyboard with 0ms lag!
+            val kbInteraction = remember { MutableInteractionSource() }
+            val isKbFocused by kbInteraction.collectIsFocusedAsState()
+            val isKbHovered by kbInteraction.collectIsHoveredAsState()
+
+            Surface(
+                onClick = onOpenKeyboard,
+                interactionSource = kbInteraction,
+                shape = CircleShape,
+                color = if (isKbFocused || isKbHovered) AuraCyanNeon else Color(0xFF16233B),
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (isKbFocused || isKbHovered) Color.White else AuraCyanDim.copy(alpha = 0.5f)
+                ),
+                modifier = Modifier
+                    .size(34.dp)
+                    .testTag("btn_bubble_direct_keyboard")
+                    .focusable(interactionSource = kbInteraction)
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Keyboard,
+                        contentDescription = "Open Floating Keyboard",
+                        tint = if (isKbFocused || isKbHovered) AuraDarkBg else AuraCyanNeon,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.width(4.dp))
 
@@ -712,7 +718,8 @@ fun FloatingKeyboardView(
     onBackToPanel: () -> Unit,
     onCloseKeyboard: () -> Unit,
     onHomeAction: () -> Unit = {},
-    onMoveKeyboard: (KeyboardMoveDirection) -> Unit = {}
+    onMoveKeyboard: (KeyboardMoveDirection) -> Unit = {},
+    onSubmitText: (String) -> Unit = {}
 ) {
     FloatingKeyboardScreen(
         keyboardState = keyboardState,
@@ -722,7 +729,8 @@ fun FloatingKeyboardView(
         onBackToPanel = onBackToPanel,
         onCloseKeyboard = onCloseKeyboard,
         onHomeAction = onHomeAction,
-        onMoveKeyboard = onMoveKeyboard
+        onMoveKeyboard = onMoveKeyboard,
+        onSubmitText = onSubmitText
     )
 }
 
